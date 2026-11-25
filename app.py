@@ -32,6 +32,7 @@ def load():
     firms = pd.read_csv(DATA / "firms_labour_nuts2.csv")
     cities = cities.merge(firms[["nuts2", "mfg_labour_cost_teur"]], on="nuts2", how="left")
     cities = cities.merge(pd.read_csv(DATA / "nuts2_names.csv"), on="nuts2", how="left")
+    cities = cities.merge(pd.read_csv(DATA / "regions_large.csv"), on="nuts2", how="left")
     return cities, regions, talent, firms
 
 
@@ -41,6 +42,33 @@ def haversine_matrix(lat1, lon1, lat2, lon2):
     dlon = lon2[None, :] - lon1[:, None]
     a = np.sin(dlat / 2) ** 2 + np.cos(lat1)[:, None] * np.cos(lat2)[None, :] * np.sin(dlon / 2) ** 2
     return 6371 * 2 * np.arcsin(np.sqrt(a))
+
+
+# Land mask (0.1° grid, lon -12..32, lat 34..62) from Natural Earth 1:110m land via sane-topojson europe_110m
+LAND = np.unpackbits(np.load(DATA / "landmask.npy"))[:280 * 440].reshape(280, 440).astype(bool)
+SEA_PENALTY = 1.5  # a route that is 100% over sea counts as 2.5x its straight-line length (detour or ferry)
+
+
+@st.cache_data(show_spinner=False)
+def eff_dist(lat1, lon1, lat2, lon2, n=16, edge_km=30.0):
+    """Straight-line km, lengthened where the straight line crosses sea: km × (1 + 1.5 × share of the line over sea).
+    The first and last 30 km are ignored so coastal cities are not penalised for their own coastline."""
+    lat1, lon1, lat2, lon2 = (np.asarray(x, dtype=np.float32) for x in (lat1, lon1, lat2, lon2))
+    D = haversine_matrix(lat1, lon1, lat2, lon2).astype(np.float32)
+    t = np.linspace(0, 1, n, dtype=np.float32)
+    edge = np.minimum(t, 1 - t)
+    out = np.empty_like(D)
+    for a in range(0, len(lat1), 64):  # chunk rows to keep memory low
+        b = slice(a, a + 64)
+        la = lat1[b, None, None] + (lat2[None, :, None] - lat1[b, None, None]) * t
+        lo = lon1[b, None, None] + (lon2[None, :, None] - lon1[b, None, None]) * t
+        i = np.clip(((la - 34) / 0.1).astype(np.int32), 0, 279)
+        j = np.clip(((lo + 12) / 0.1).astype(np.int32), 0, 439)
+        valid = edge[None, None, :] * D[b, :, None] > edge_km
+        sea = (~LAND[i, j]) & valid
+        frac = sea.sum(2) / np.maximum(valid.sum(2), 1)
+        out[b] = D[b] * (1 + SEA_PENALTY * frac)
+    return out
 
 
 def delivery_days(road_km, km_per_day):
@@ -75,6 +103,18 @@ def banana_trace():
 
 
 # ---------- sidebar ----------
+st.sidebar.header("Production sites")
+n_sites_choice = st.sidebar.select_slider(
+    "Number of production sites", options=["Auto", "1", "2", "3", "4", "5"], value="Auto",
+    help="Auto = the number with the best net score (see 'Cost per extra site'). The chosen network is shown in the "
+         "'Production network' section and on its map.")
+site_cost = st.sidebar.slider("Cost per extra site (score points)", 0, 20, 8,
+                              help="How many score points an extra site must add to be worth its fixed costs "
+                                   "(rent, equipment, staff, management). 0 = sites are free, so more sites always win.")
+region_level = st.sidebar.radio("Region size", ["Large regions", "Small regions (NUTS-2)"], index=0, horizontal=True,
+                                help="Large: German states, Italian macro-regions (e.g. North-West Italy), Bohemia vs "
+                                     "Moravia-Silesia, Polish macro-regions. Small: EU NUTS-2 regions.")
+
 st.sidebar.header("Scoring weights")
 WEIGHTS = {  # key: (label, default %, help)
     "w_reach": ("Market reach", 36, "Share of EU demand within the delivery promise."),
@@ -112,10 +152,9 @@ w_sum = max(w_reach + w_labour + w_talent + w_rent + w_port, 1)
 st.sidebar.caption(f"Total: {w_sum}%. Moving one slider rescales the others so the total stays 100%.")
 
 st.sidebar.header("Labour & talent")
-labour_source = st.sidebar.radio(
-    "Labour cost basis", ["Regional, manufacturing (k€/person/yr)", "National, all sectors (€/hour)"], index=0,
-    help="Regional: Eurostat SBS labour cost per person employed in manufacturing, NUTS-2, 2024. "
-         "National: Eurostat hourly labour cost, whole economy, 2025.")
+min_talent = st.sidebar.slider("Minimum talent pool (k people)", 0, 600, 250, 25,
+                               help="Cities with fewer high-tech manufacturing workers within the hiring radius are "
+                                    "excluded: a production site must be able to hire technicians and engineers.")
 hire_km = st.sidebar.slider("Hiring radius (km)", 50, 300, 150, 25, help="Talent is distance-weighted: full weight nearby, 37% at this radius, fading to zero beyond about twice the radius.")
 
 st.sidebar.header("Delivery promise")
@@ -151,31 +190,35 @@ w = dem.weight.to_numpy(float)
 w_total = w.sum()
 
 # 1. market reach
-R_all = haversine_matrix(cand.lat, cand.lon, dem.lat, dem.lon) * road_factor  # candidates x demand, road km
+R_all = eff_dist(cand.lat.values, cand.lon.values, dem.lat.values, dem.lon.values)  # candidates x demand, km (sea-corrected)
 days = delivery_days(R_all, km_per_day)
 cand["reach_pct"] = 100 * (w[None, :] * (days <= promise_days)).sum(axis=1) / w_total
 for _k in (1, 2, 3):
     cand[f"reach_{_k}d_pct"] = 100 * (w[None, :] * (days <= _k)).sum(axis=1) / w_total
 
-# 2. labour cost
-if labour_source.startswith("Regional"):
-    cand["labour_metric"] = cand.mfg_labour_cost_teur
-    lab_label = "mfg labour k€/yr"
-else:
-    cand["labour_metric"] = cand.labour_cost_eur_h
-    lab_label = "labour €/h"
+# 2. labour cost: regional manufacturing labour cost per person per year
+cand["labour_metric"] = cand.mfg_labour_cost_teur
+lab_label = "mfg labour k€/yr"
 
 cand["rent"] = 0.0  # rent not used (no reliable data)
 
 # 3. talent pool (thousand people in high/medium-high tech manufacturing within hiring radius)
-Dt = haversine_matrix(cand.lat, cand.lon, talent.lat, talent.lon)
+Dt = eff_dist(cand.lat.values, cand.lon.values, talent.lat.values, talent.lon.values)
 # distance-weighted (no hard cut-off): weight 1 at 0 km, 0.37 at the hiring radius, ~0 beyond twice the radius
 cand["talent_ths"] = (talent.hitech_mfg_ths.to_numpy(float)[None, :] * np.exp(-(Dt / hire_km) ** 2)).sum(axis=1)
 
 # 5. port proximity (road km to nearest major seaport)
-Dp = haversine_matrix(cand.lat, cand.lon, PORTS.lat, PORTS.lon) * road_factor
+Dp = eff_dist(cand.lat.values, cand.lon.values, PORTS.lat.values, PORTS.lon.values)
 cand["port_km"] = Dp.min(axis=1)
 cand["nearest_port"] = PORTS.port.to_numpy()[Dp.argmin(axis=1)]
+
+# minimum talent pool: a location must be able to hire technicians and engineers
+keep = (cand.talent_ths >= min_talent).to_numpy()
+if not keep.any():
+    st.warning("No candidate city meets the minimum talent pool. Lower the threshold in the sidebar.")
+    st.stop()
+cand = cand[keep].reset_index(drop=True)
+R_all = R_all[keep]
 
 # score scaling bounds from single-site candidates (reused for networks)
 B = {c: (cand[c].min(), cand[c].max()) for c in ("reach_pct", "labour_metric", "talent_ths", "rent", "port_km")}
@@ -269,7 +312,6 @@ k1.metric("Top location", f"{top.city} ({top.country_code})")
 k1.caption(f"Score {top.score:.0f} / 100")
 k2.metric(f"Market reach ({promise_days}d)", f"{top.reach_pct:.0f}%")
 k3.metric("Labour cost (mfg, regional)", f"€{top.mfg_labour_cost_teur:.0f}k/yr")
-k3.caption(f"National, all sectors: €{top.labour_cost_eur_h:.1f}/h")
 k4.metric(f"Talent within {hire_km} km", f"{top.talent_ths:,.0f}k")
 
 # ---------- map of candidates ----------
@@ -278,7 +320,7 @@ if True:
     fig = px.scatter_map(
         cand, lat="lat", lon="lon", color="score", size="population", size_max=22, hover_name="city",
         hover_data={"country": True, "rank": True, "score": ":.0f", "reach_pct": ":.0f",
-                    "labour_cost_eur_h": ":.1f", "mfg_labour_cost_teur": ":.0f", "talent_ths": ":,.0f",
+                    "mfg_labour_cost_teur": ":.0f", "talent_ths": ":,.0f",
                     "nearest_port": True, "port_km": ":,.0f", "lat": False, "lon": False, "population": ":,"},
         color_continuous_scale="Viridis", zoom=4, center={"lat": c_lat, "lon": c_lon},
         map_style=MAP_STYLE, height=600,
@@ -290,45 +332,45 @@ if True:
         mode="lines", line={"width": 1, "color": "grey"}, hoverinfo="skip", showlegend=False))
     if show_banana:
         fig.add_trace(banana_trace())
-    fig.add_trace(go.Scattermap(lat=PORTS.lat, lon=PORTS.lon, mode="markers", text=PORTS.port, hoverinfo="text",
-                                marker={"size": 9, "color": "#990f3d"}, name="Major ports"))
     fig.update_layout(margin={"l": 0, "r": 0, "t": 0, "b": 0})
     st.plotly_chart(fig, width="stretch")
 
 TABLE_COLS = {"reach_1d_pct": "reach 1d %", "reach_2d_pct": "reach 2d %", "reach_3d_pct": "reach 3d %",
-              "mfg_labour_cost_teur": "mfg k€/yr", "labour_cost_eur_h": "€/h", "talent_ths": "talent (k)",
-              "rent": "rent €/m²", "port_km": "port km", "nearest_port": "nearest port"}
+              "mfg_labour_cost_teur": "mfg k€/yr", "talent_ths": "talent (k)",
+              "rent": "rent €/m²", "port_km": "port km"}
 if w_rent == 0:  # hide rent until it is used in the score
     TABLE_COLS.pop("rent")
 NUM_FMT = {"reach 1d %": "%.0f", "reach 2d %": "%.0f", "reach 3d %": "%.0f", "€/h": "%.1f", "mfg k€/yr": "%.0f",
            "rent €/m²": "%.2f", "port km": "%.0f",
            "talent (k)": "%,.0f", "score": "%.0f"}
 
+REG_KEY, REG_NAME = ("region_large_code", "region_large") if region_level == "Large regions" else ("nuts2", "region")
+
 st.subheader("Top 20 locations")
 one_per_region = st.toggle("Show only the best city per region", value=True,
                            help="Avoids a list of neighbouring cities from the same region.")
-top_src = cand.drop_duplicates("nuts2") if one_per_region else cand
-show = top_src.head(20)[["rank", "city", "region", "country_code", "score", *TABLE_COLS]].rename(
-    columns={"country_code": "cc", **TABLE_COLS})
+top_src = cand.drop_duplicates(REG_KEY) if one_per_region else cand
+show = top_src.head(20)[["rank", "city", REG_NAME, "country_code", "score", *TABLE_COLS]].rename(
+    columns={"country_code": "cc", REG_NAME: "region", **TABLE_COLS})
 cfg = {c: st.column_config.NumberColumn(format=f) for c, f in NUM_FMT.items() if c in show}
 cfg["score"] = st.column_config.ProgressColumn("score", min_value=0, max_value=100, format="%.0f")
 st.dataframe(show, hide_index=True, width="stretch", column_config=cfg, height=36 * 21 + 3)
 
 # ---------- regions ----------
 st.subheader("Top regions")
-st.caption("Regions (NUTS-2) ranked by their best-scoring city. 'Cities in top 50' shows how deep the region is.")
+st.caption(f"{region_level} ranked by their best-scoring city. 'Cities in top 50' shows how deep the region is.")
 top50 = set(cand.head(50).index)
 reg = (cand.assign(in_top50=cand.index.isin(top50))
-       .groupby(["nuts2", "region", "country_code"], as_index=False)
+       .groupby([REG_KEY, REG_NAME, "country_code"], as_index=False)
        .agg(best_score=("score", "max"), best_city=("city", "first"), best_rank=("rank", "min"),
             avg_score=("score", "mean"), cities=("city", "count"), in_top50=("in_top50", "sum"),
             reach=("reach_pct", "max"), labour=("mfg_labour_cost_teur", "mean"), talent=("talent_ths", "max"))
        .sort_values("best_score", ascending=False).reset_index(drop=True))
 reg.insert(0, "region rank", reg.index + 1)
 st.dataframe(
-    reg.head(20)[["region rank", "region", "country_code", "best_city", "best_rank", "best_score", "avg_score",
+    reg.head(20)[["region rank", REG_NAME, "country_code", "best_city", "best_rank", "best_score", "avg_score",
                   "cities", "in_top50", "reach", "labour", "talent"]].rename(columns={
-        "country_code": "cc", "best_city": "best city", "best_rank": "city rank", "best_score": "best score",
+        REG_NAME: "region", "country_code": "cc", "best_city": "best city", "best_rank": "city rank", "best_score": "best score",
         "avg_score": "avg score", "cities": "candidate cities", "in_top50": "cities in top 50",
         "reach": f"reach {promise_days}d %", "labour": "mfg k€/yr", "talent": "talent (k)"}),
     hide_index=True, width="stretch",
@@ -354,9 +396,6 @@ st.subheader("Production network: 1 to 5 sites")
 st.caption("Each customer region is served from its nearest site; labour cost, talent and port distance are weighted "
            "by the demand each site serves. Gross score uses the single-site scale (above 100 = better than any single "
            "site). Net score subtracts a cost for every site beyond the first, so more sites only win if they add enough.")
-site_cost = st.slider("Cost per extra site (score points)", 0, 20, 8,
-                      help="How many score points an extra site must add to be worth its fixed costs "
-                           "(rent, equipment, staff, management). 0 = sites are free, so more sites always win.")
 
 chain = greedy_network(5)  # greedy: each step adds the site that improves the network most
 opt_rows = []
@@ -375,14 +414,16 @@ st.dataframe(opt, hide_index=True, width="stretch",
              column_config={c: st.column_config.NumberColumn(format="%.0f")
                             for c in opt.columns if c not in ("", "sites", "locations")})
 
-mode = st.radio("Network to inspect", ["Recommended", "1 site", "2 sites", "3 sites", "4 sites", "5 sites",
-                                       "Choose manually"], horizontal=True)
-if mode == "Choose manually":
+k_show = best_k if n_sites_choice == "Auto" else int(n_sites_choice)
+st.markdown(f"**Showing: {k_show} site{'s' if k_show > 1 else ''}** "
+            f"({'recommended' if n_sites_choice == 'Auto' else 'set in the sidebar'}).")
+manual_on = st.toggle("Choose sites manually instead", value=False)
+if manual_on:
     manual = st.multiselect("Select up to 5 sites", labels, max_selections=5,
-                            default=[labels[i] for i in chain[:best_k]])
+                            default=[labels[i] for i in chain[:k_show]])
     net_idx = [labels.index(l) for l in manual]
 else:
-    net_idx = chain[:best_k] if mode == "Recommended" else chain[:int(mode[0])]
+    net_idx = chain[:k_show]
 
 if net_idx:
     m, nearest, dmin, served = network_metrics(net_idx)
@@ -415,14 +456,13 @@ if net_idx:
         st.markdown("**Per site**")
         st.dataframe(pd.DataFrame({"site": sites.city.values, "cc": sites.country_code.values,
                                    "mfg k€/yr": sites.mfg_labour_cost_teur.values,
-                                   "€/h": sites.labour_cost_eur_h.values,
                                    **({"rent €/m²": sites.rent.values} if w_rent else {}),
-                                   "nearest port": (sites.nearest_port + " (" + sites.port_km.round().astype(int).astype(str) + " km)").values,
+                                   "port km": sites.port_km.values,
                                    "talent (k)": sites.talent_ths.values, "demand served %": served}),
                      hide_index=True, width="stretch",
                      column_config={"demand served %": st.column_config.NumberColumn(format="%.0f"),
-                                    "€/h": st.column_config.NumberColumn(format="%.1f"),
                                     "mfg k€/yr": st.column_config.NumberColumn(format="%.0f"),
+                                    "port km": st.column_config.NumberColumn(format="%.0f"),
                                     "rent €/m²": st.column_config.NumberColumn(format="%.2f"),
                                     "talent (k)": st.column_config.NumberColumn(format="%,.0f")})
 
@@ -431,7 +471,7 @@ st.subheader("Delivery days from a selected city")
 pick = st.selectbox("City", labels, index=0)
 row = cand.iloc[labels.index(pick)]
 dest = dem.copy()
-dest["dist_km"] = haversine_matrix([row.lat], [row.lon], dem.lat, dem.lon)[0] * road_factor
+dest["dist_km"] = eff_dist(np.array([row.lat]), np.array([row.lon]), dem.lat.values, dem.lon.values)[0]
 dest["delivery"] = day_label(delivery_days(dest.dist_km, km_per_day))
 c1, c2 = st.columns([3, 2])
 with c1:
@@ -452,7 +492,6 @@ with c2:
     for lbl, v in zip(["Within 1 day", "Within 2 days", "Within 3 days"], cum.iloc[:3]):
         st.metric(lbl, f"{v:.0f}%")
     st.metric("Labour cost (manufacturing, regional)", f"€{row.mfg_labour_cost_teur:.0f}k per person/yr")
-    st.caption(f"National, all sectors: €{row.labour_cost_eur_h:.1f}/h")
     st.metric(f"Talent within {hire_km} km", f"{row.talent_ths:,.0f}k")
 
 # ---------- sources ----------
@@ -461,10 +500,8 @@ with st.expander("Data, sources and limitations"):
         """
 1. **Cities**: GeoNames (via `geonamescache`), EU-27 mainland cities > 50,000 inhabitants; districts within 15 km merged. Ireland, Cyprus, Malta and islands excluded.
 2. **Demand**: number of manufacturing local units (firms and plants, micro firms included) per NUTS-2 region, Eurostat `sbs_r_nuts2021`, 2024, at the GDP-weighted centre of each region. Mainland EU only.
-3. **Delivery days**: distance model, not carrier data. Straight-line distance; 1 day per set number of km.
-4. **Labour cost** (choose in sidebar):
-   - Regional (default): Eurostat `sbs_r_nuts2021`, labour cost per person employed in manufacturing local units, NUTS-2, 2024, incl. employer contributions. "Persons employed" also counts unpaid owners and family workers, which lowers the average in regions with many micro firms (e.g. Italy).
-   - National: Eurostat `lc_lci_lev`, hourly labour costs, whole economy excl. public administration, 2025 (Belgium 2024).
+3. **Delivery days**: distance model, not carrier data. Straight-line distance, lengthened where the line crosses sea (× (1 + 1.5 × share over sea), using a Natural Earth land mask), so e.g. Croatia–Italy is not treated as a short hop across the Adriatic. 1 day per set number of km. The same correction applies to talent and port distances.
+4. **Labour cost**: Eurostat `sbs_r_nuts2021`, labour cost per person employed in manufacturing local units, NUTS-2, 2024, incl. employer contributions. "Persons employed" also counts unpaid owners and family workers, which lowers the average in regions with many micro firms (e.g. Italy).
    **Firms**: number of manufacturing local units per NUTS-2 region, same dataset, 2024 (includes micro firms).
 5. **Port proximity**: straight-line km to the nearest of 33 major mainland-EU seaports (a selection, approximate locations); shorter scores higher.
 6. **Talent**: employment in high & medium-high technology manufacturing (Eurostat `htec_emp_reg2`, NACE C_HTC_MH, thousand persons, NUTS-2, latest year), spread over its NUTS-3 regions in proportion to manufacturing GVA (so talent sits where industry is), then distance-weighted from each city (weight 1 nearby, 37% at the hiring radius, fading beyond).

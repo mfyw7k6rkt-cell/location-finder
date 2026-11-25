@@ -243,6 +243,45 @@ def build_firms_labour(out, regions):
           f"{df.mfg_labour_cost_teur.notna().sum()} of {len(df)} NUTS-2 regions")
 
 
+def build_region_names(out):
+    """NUTS-2 region names (English labels from Eurostat)."""
+    d = fetch_json(EUROSTAT + "sbs_r_nuts2021?format=JSON&lang=EN&nace_r2=C&indic_sbs=LOC_NR&lastTimePeriod=1")
+    lab = d["dimension"]["geo"]["category"]["label"]
+    pd.DataFrame([(k, v) for k, v in lab.items() if len(k) == 4], columns=["nuts2", "region"]).to_csv(
+        out / "nuts2_names.csv", index=False)
+
+
+LARGE_EN = {  # readable English names for large regions (NUTS-1); Czechia split into Bohemia and Moravia-Silesia
+    "ITC": "North-West Italy", "ITH": "North-East Italy", "ITI": "Central Italy", "ITF": "South Italy",
+    "ES1": "North-West Spain", "ES2": "North-East Spain", "ES3": "Madrid region", "ES4": "Central Spain",
+    "ES5": "East Spain", "ES6": "South Spain", "PL2": "Southern Poland", "PL4": "North-West Poland",
+    "PL5": "South-West Poland", "PL6": "Northern Poland", "PL7": "Central Poland", "PL8": "Eastern Poland",
+    "PL9": "Masovia (Warsaw)", "HU1": "Central Hungary (Budapest)", "HU2": "Transdanubia (West Hungary)",
+    "HU3": "Great Plain & North Hungary", "NL1": "North Netherlands", "NL2": "East Netherlands",
+    "NL3": "West Netherlands", "NL4": "South Netherlands", "AT1": "Eastern Austria", "AT2": "Southern Austria",
+    "AT3": "Western Austria", "BE1": "Brussels", "BE2": "Flanders", "BE3": "Wallonia", "SK0": "Slovakia",
+    "SI0": "Slovenia", "HR0": "Croatia", "DK0": "Denmark", "LU0": "Luxembourg", "SE1": "East Sweden",
+    "SE2": "South Sweden", "SE3": "North Sweden", "DE1": "Baden-Württemberg", "DE2": "Bavaria", "DE3": "Berlin",
+    "DE4": "Brandenburg", "DE5": "Bremen", "DE6": "Hamburg", "DE7": "Hesse", "DE8": "Mecklenburg-Vorpommern",
+    "DE9": "Lower Saxony", "DEA": "North Rhine-Westphalia", "DEB": "Rhineland-Palatinate", "DEC": "Saarland",
+    "DED": "Saxony", "DEE": "Saxony-Anhalt", "DEF": "Schleswig-Holstein", "DEG": "Thuringia"}
+
+
+def build_large_regions(out):
+    d = fetch_json(EUROSTAT + "sbs_r_nuts2021?format=JSON&lang=EN&nace_r2=C&indic_sbs=LOC_NR&lastTimePeriod=1")
+    lab = d["dimension"]["geo"]["category"]["label"]
+    rows = []
+    for n2 in sorted(pd.read_csv(out / "cities.csv").nuts2.unique()):
+        if n2.startswith("CZ"):
+            code, name = (("CZ-B", "Bohemia (West & Central Czechia)") if n2 in ("CZ01", "CZ02", "CZ03", "CZ04", "CZ05")
+                          else ("CZ-M", "Moravia-Silesia (East Czechia)"))
+        else:
+            code = n2[:3]
+            name = LARGE_EN.get(code, lab.get(code, code))
+        rows.append((n2, code, name))
+    pd.DataFrame(rows, columns=["nuts2", "region_large_code", "region_large"]).to_csv(out / "regions_large.csv", index=False)
+
+
 def main():
     out = Path(__file__).parent / "data"
     out.mkdir(exist_ok=True)
@@ -250,6 +289,7 @@ def main():
     build_productivity(out)
     build_talent(out, pd.read_csv(out / "manufacturing_nuts3.csv"))
     build_firms_labour(out, pd.read_csv(out / "manufacturing_nuts3.csv"))
+    build_region_names(out)
 
     raw = [
         c for c in geonamescache.GeonamesCache().get_cities().values()
@@ -296,6 +336,7 @@ def main():
     )
     lc.to_csv(out / "labour_cost.csv", index=False)
     print(f"{len(df)} cities, {len(lc)} labour cost rows written to {out}")
+    build_large_regions(out)
 
 
 if __name__ == "__main__":
