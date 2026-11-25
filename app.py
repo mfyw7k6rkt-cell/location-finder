@@ -31,6 +31,7 @@ def load():
     talent = pd.read_csv(DATA / "talent_nuts3.csv")
     firms = pd.read_csv(DATA / "firms_labour_nuts2.csv")
     cities = cities.merge(firms[["nuts2", "mfg_labour_cost_teur"]], on="nuts2", how="left")
+    cities = cities.merge(pd.read_csv(DATA / "nuts2_names.csv"), on="nuts2", how="left")
     return cities, regions, talent, firms
 
 
@@ -79,7 +80,6 @@ WEIGHTS = {  # key: (label, default %, help)
     "w_reach": ("Market reach", 36, "Share of EU demand within the delivery promise."),
     "w_labour": ("Labour cost", 36, "Lower cost scores higher."),
     "w_talent": ("Talent pool", 18, "Employment in high & medium-high tech manufacturing within the hiring radius."),
-    "w_rent": ("Industrial rent", 0, "Lower rent scores higher. Enter rents under 'Industrial rent inputs' on the main page."),
     "w_port": ("Port proximity", 10, "Straight-line km to the nearest major EU seaport; closer scores higher."),
 }
 for _k, (_l, _d, _h) in WEIGHTS.items():
@@ -106,7 +106,8 @@ def rebalance(changed):
 
 for _k, (_l, _d, _h) in WEIGHTS.items():
     st.sidebar.slider(f"{_l} (%)", 0, 100, key=_k, help=_h, on_change=rebalance, args=(_k,))
-w_reach, w_labour, w_talent, w_rent, w_port = (st.session_state[k] for k in WEIGHTS)
+w_reach, w_labour, w_talent, w_port = (st.session_state[k] for k in WEIGHTS)
+w_rent = 0  # industrial rent removed: no reliable rent data across EU cities
 w_sum = max(w_reach + w_labour + w_talent + w_rent + w_port, 1)
 st.sidebar.caption(f"Total: {w_sum}%. Moving one slider rescales the others so the total stays 100%.")
 
@@ -121,18 +122,11 @@ st.sidebar.header("Delivery promise")
 promise_days = st.sidebar.slider("Delivery days", 1, 4, 2)
 km_per_day = st.sidebar.slider("Km per delivery day (straight line)", 200, 1000, 500, 50)
 road_factor = 1.0  # distances are straight-line ("as the crow flies")
-demand_basis = st.sidebar.radio(
-    "Demand measured as", ["Manufacturing firms", "Urban population", "Regional GDP"], index=0,
-    help="Manufacturing firms: number of manufacturing local units per NUTS-2 region (Eurostat SBS 2024). "
-         "Urban population: EU cities > 50k. Regional GDP: Eurostat NUTS-3 GDP 2023.",
-)
 show_banana = st.sidebar.checkbox("Show 'blue banana' corridor on map", value=True)
 
-st.sidebar.header("Search area")
-c_lat = st.sidebar.number_input("Centre latitude", value=48.5, step=0.5)
-c_lon = st.sidebar.number_input("Centre longitude", value=8.0, step=0.5)
-radius = st.sidebar.slider("Radius (km)", 300, 1500, 1050, 50)
-it_min_lat = st.sidebar.slider("Italy: exclude south of latitude", 38.0, 46.0, 43.5, 0.5)
+st.sidebar.header("Candidate cities")
+# fixed search area: 1,050 km around 48.5°N, 8.0°E (northern Spain to Poland, northern Italy to Denmark)
+c_lat, c_lon, radius = 48.5, 8.0, 1050
 min_pop = st.sidebar.select_slider(
     "Min. city population", options=[50_000, 100_000, 200_000, 500_000], value=50_000,
     format_func=lambda v: f"{v:,}",
@@ -143,24 +137,16 @@ dist_centre = haversine_matrix([c_lat], [c_lon], cities.lat, cities.lon)[0]
 mask = (
     (dist_centre <= radius)
     & (cities.population >= min_pop)
-    & ~((cities.country_code == "IT") & (cities.lat < it_min_lat))
 )
 cand = cities[mask].copy().reset_index(drop=True)
 if cand.empty:
     st.warning("No candidate cities with these settings.")
     st.stop()
 
-# demand points
-if demand_basis == "Regional GDP":
-    dem = regions.rename(columns={"gdp_meur": "weight"})[["name", "lat", "lon", "weight"]]
-    dem_label = "EU GDP"
-elif demand_basis == "Manufacturing firms":
-    dem = firms.dropna(subset=["mfg_firms"]).rename(columns={"mfg_firms": "weight", "nuts2": "name"})[
-        ["name", "lat", "lon", "weight"]]
-    dem_label = "EU manufacturing firms"
-else:
-    dem = cities.rename(columns={"population": "weight", "city": "name"})[["name", "lat", "lon", "weight"]]
-    dem_label = "EU urban population"
+# demand points: manufacturing firms (local units) per NUTS-2 region
+dem = firms.dropna(subset=["mfg_firms"]).rename(columns={"mfg_firms": "weight", "nuts2": "name"})[
+    ["name", "lat", "lon", "weight"]]
+dem_label = "EU manufacturing firms"
 w = dem.weight.to_numpy(float)
 w_total = w.sum()
 
@@ -179,31 +165,7 @@ else:
     cand["labour_metric"] = cand.labour_cost_eur_h
     lab_label = "labour €/h"
 
-# 4. industrial rent (manual inputs: country defaults + city overrides, €/m²/month)
-with st.expander("Industrial rent inputs (€/m²/month) – edit to use the rent weight"):
-    st.caption("Defaults: Germany = average prime logistics rent; Munich and Frankfurt = prime rents "
-               "(Cushman & Wakefield MarketBeat Germany Logistics Q3 2025). Other countries are empty: fill in from "
-               "broker reports or quotes. Cities without a value get the median of the entered values.")
-    if "rent_country" not in st.session_state:
-        ccs = sorted(cities.country_code.unique())
-        st.session_state.rent_country = pd.DataFrame(
-            {"country_code": ccs, "rent_eur_m2_month": [6.69 if c == "DE" else np.nan for c in ccs]})
-        st.session_state.rent_city = pd.DataFrame({"city": ["Munich", "Frankfurt am Main"],
-                                                   "rent_eur_m2_month": [10.90, 8.85]})
-    rc1, rc2 = st.columns(2)
-    with rc1:
-        st.markdown("**Per country**")
-        rent_country = st.data_editor(st.session_state.rent_country, hide_index=True, key="rc_edit",
-                                      disabled=["country_code"], width="stretch")
-    with rc2:
-        st.markdown("**Per city (overrides country)**")
-        rent_city = st.data_editor(st.session_state.rent_city, hide_index=True, num_rows="dynamic", key="rcity_edit",
-                                   width="stretch",
-                                   column_config={"city": st.column_config.SelectboxColumn(
-                                       options=sorted(cities.city.unique()))})
-rent = cand.country_code.map(rent_country.set_index("country_code").rent_eur_m2_month)
-rent = cand.city.map(rent_city.dropna().drop_duplicates("city").set_index("city").rent_eur_m2_month).fillna(rent)
-cand["rent"] = rent.fillna(rent.median() if rent.notna().any() else 0.0)
+cand["rent"] = 0.0  # rent not used (no reliable data)
 
 # 3. talent pool (thousand people in high/medium-high tech manufacturing within hiring radius)
 Dt = haversine_matrix(cand.lat, cand.lon, talent.lat, talent.lon)
@@ -342,13 +304,39 @@ NUM_FMT = {"reach 1d %": "%.0f", "reach 2d %": "%.0f", "reach 3d %": "%.0f", "�
            "rent €/m²": "%.2f", "port km": "%.0f",
            "talent (k)": "%,.0f", "score": "%.0f"}
 
-if True:
-    st.subheader("Top 20")
-    show = cand.head(20)[["rank", "city", "country_code", "score", *TABLE_COLS]].rename(
-        columns={"country_code": "cc", **TABLE_COLS})
-    cfg = {c: st.column_config.NumberColumn(format=f) for c, f in NUM_FMT.items() if c in show}
-    cfg["score"] = st.column_config.ProgressColumn("score", min_value=0, max_value=100, format="%.0f")
-    st.dataframe(show, hide_index=True, width="stretch", column_config=cfg, height=36 * 21 + 3)
+st.subheader("Top 20 locations")
+one_per_region = st.toggle("Show only the best city per region", value=True,
+                           help="Avoids a list of neighbouring cities from the same region.")
+top_src = cand.drop_duplicates("nuts2") if one_per_region else cand
+show = top_src.head(20)[["rank", "city", "region", "country_code", "score", *TABLE_COLS]].rename(
+    columns={"country_code": "cc", **TABLE_COLS})
+cfg = {c: st.column_config.NumberColumn(format=f) for c, f in NUM_FMT.items() if c in show}
+cfg["score"] = st.column_config.ProgressColumn("score", min_value=0, max_value=100, format="%.0f")
+st.dataframe(show, hide_index=True, width="stretch", column_config=cfg, height=36 * 21 + 3)
+
+# ---------- regions ----------
+st.subheader("Top regions")
+st.caption("Regions (NUTS-2) ranked by their best-scoring city. 'Cities in top 50' shows how deep the region is.")
+top50 = set(cand.head(50).index)
+reg = (cand.assign(in_top50=cand.index.isin(top50))
+       .groupby(["nuts2", "region", "country_code"], as_index=False)
+       .agg(best_score=("score", "max"), best_city=("city", "first"), best_rank=("rank", "min"),
+            avg_score=("score", "mean"), cities=("city", "count"), in_top50=("in_top50", "sum"),
+            reach=("reach_pct", "max"), labour=("mfg_labour_cost_teur", "mean"), talent=("talent_ths", "max"))
+       .sort_values("best_score", ascending=False).reset_index(drop=True))
+reg.insert(0, "region rank", reg.index + 1)
+st.dataframe(
+    reg.head(20)[["region rank", "region", "country_code", "best_city", "best_rank", "best_score", "avg_score",
+                  "cities", "in_top50", "reach", "labour", "talent"]].rename(columns={
+        "country_code": "cc", "best_city": "best city", "best_rank": "city rank", "best_score": "best score",
+        "avg_score": "avg score", "cities": "candidate cities", "in_top50": "cities in top 50",
+        "reach": f"reach {promise_days}d %", "labour": "mfg k€/yr", "talent": "talent (k)"}),
+    hide_index=True, width="stretch",
+    column_config={"best score": st.column_config.ProgressColumn("best score", min_value=0, max_value=100, format="%.0f"),
+                   "avg score": st.column_config.NumberColumn(format="%.0f"),
+                   f"reach {promise_days}d %": st.column_config.NumberColumn(format="%.0f"),
+                   "mfg k€/yr": st.column_config.NumberColumn(format="%.0f"),
+                   "talent (k)": st.column_config.NumberColumn(format="%,.0f")})
 
 # ---------- compare cities ----------
 st.subheader("Compare cities")
@@ -362,29 +350,39 @@ if chosen:
                  column_config={c: st.column_config.NumberColumn(format=f) for c, f in NUM_FMT.items() if c in comp})
 
 # ---------- multi-site network ----------
-st.subheader("Production network: up to 3 sites")
-st.caption("Each customer region is served from its nearest site; labour cost and talent are weighted by the demand "
-           "each site serves. Score uses the single-site scale (above 100 = better than any single site). "
-           "Every extra site adds fixed costs (rent, equipment, staff) that are not in this score.")
+st.subheader("Production network: 1 to 5 sites")
+st.caption("Each customer region is served from its nearest site; labour cost, talent and port distance are weighted "
+           "by the demand each site serves. Gross score uses the single-site scale (above 100 = better than any single "
+           "site). Net score subtracts a cost for every site beyond the first, so more sites only win if they add enough.")
+site_cost = st.slider("Cost per extra site (score points)", 0, 20, 8,
+                      help="How many score points an extra site must add to be worth its fixed costs "
+                           "(rent, equipment, staff, management). 0 = sites are free, so more sites always win.")
 
-suggest = {k: greedy_network(k) for k in (1, 2, 3)}
+chain = greedy_network(5)  # greedy: each step adds the site that improves the network most
 opt_rows = []
-for k, idx in suggest.items():
-    m, *_ = network_metrics(idx)
-    opt_rows.append({"sites": k, "locations": " + ".join(cand.city[i] for i in idx), **m})
-st.markdown("**Suggested networks** (greedy optimisation on current settings)")
-opt = pd.DataFrame(opt_rows)
-if w_rent == 0:
-    opt = opt.drop(columns="rent €/m²")
+for k in range(1, 6):
+    m, *_ = network_metrics(chain[:k])
+    net = m["score"] - site_cost * (k - 1)
+    opt_rows.append({"sites": k, "locations": " + ".join(cand.city[i] for i in chain[:k]),
+                     **{c: v for c, v in m.items() if c != "rent €/m²"}, "site cost": -site_cost * (k - 1),
+                     "net score": net})
+opt = pd.DataFrame(opt_rows).rename(columns={"score": "gross score"})
+best_k = int(opt.loc[opt["net score"].idxmax(), "sites"])
+opt.insert(0, "", np.where(opt.sites == best_k, "recommended", ""))
+st.markdown(f"**Suggested networks** (greedy optimisation on current settings). Recommended: **{best_k} "
+            f"site{'s' if best_k > 1 else ''}**.")
 st.dataframe(opt, hide_index=True, width="stretch",
-             column_config={c: st.column_config.NumberColumn(format="%.0f") for c in opt.columns if c not in ("sites", "locations")})
+             column_config={c: st.column_config.NumberColumn(format="%.0f")
+                            for c in opt.columns if c not in ("", "sites", "locations")})
 
-mode = st.radio("Network to inspect", ["Suggested (3 sites)", "Suggested (2 sites)", "Choose manually"], horizontal=True)
+mode = st.radio("Network to inspect", ["Recommended", "1 site", "2 sites", "3 sites", "4 sites", "5 sites",
+                                       "Choose manually"], horizontal=True)
 if mode == "Choose manually":
-    manual = st.multiselect("Select up to 3 sites", labels, max_selections=3, default=[labels[i] for i in suggest[2]])
+    manual = st.multiselect("Select up to 5 sites", labels, max_selections=5,
+                            default=[labels[i] for i in chain[:best_k]])
     net_idx = [labels.index(l) for l in manual]
 else:
-    net_idx = suggest[3] if mode.startswith("Suggested (3") else suggest[2]
+    net_idx = chain[:best_k] if mode == "Recommended" else chain[:int(mode[0])]
 
 if net_idx:
     m, nearest, dmin, served = network_metrics(net_idx)
@@ -392,7 +390,8 @@ if net_idx:
     a.metric("Within 1 day", f"{m['reach 1d %']:.0f}%")
     b.metric("Within 2 days", f"{m['reach 2d %']:.0f}%")
     c.metric("Within 3 days", f"{m['reach 3d %']:.0f}%")
-    d.metric("Network score", f"{m['score']:.0f}")
+    d.metric("Net score", f"{m['score'] - site_cost * (len(net_idx) - 1):.0f}")
+    d.caption(f"Gross {m['score']:.0f} − site cost {site_cost * (len(net_idx) - 1)}")
 
     nd = dem.copy()
     nd["dist_km"] = dmin
@@ -461,13 +460,12 @@ with st.expander("Data, sources and limitations"):
     st.markdown(
         """
 1. **Cities**: GeoNames (via `geonamescache`), EU-27 mainland cities > 50,000 inhabitants; districts within 15 km merged. Ireland, Cyprus, Malta and islands excluded.
-2. **Demand**: regional GDP (Eurostat `nama_10r_3gdp`, 2023) or manufacturing GVA (NACE C, Eurostat `nama_10r_3gva`, 2023) per NUTS-3 region, at NUTS-3 label points (Eurostat Nuts2json, NUTS 2024).
+2. **Demand**: number of manufacturing local units (firms and plants, micro firms included) per NUTS-2 region, Eurostat `sbs_r_nuts2021`, 2024, at the GDP-weighted centre of each region. Mainland EU only.
 3. **Delivery days**: distance model, not carrier data. Straight-line distance; 1 day per set number of km.
 4. **Labour cost** (choose in sidebar):
    - Regional (default): Eurostat `sbs_r_nuts2021`, labour cost per person employed in manufacturing local units, NUTS-2, 2024, incl. employer contributions. "Persons employed" also counts unpaid owners and family workers, which lowers the average in regions with many micro firms (e.g. Italy).
    - National: Eurostat `lc_lci_lev`, hourly labour costs, whole economy excl. public administration, 2025 (Belgium 2024).
    **Firms**: number of manufacturing local units per NUTS-2 region, same dataset, 2024 (includes micro firms).
-   **Rent**: manual inputs; Germany default and Munich/Frankfurt from Cushman & Wakefield MarketBeat Germany Logistics Q3 2025 (prime rents).
 5. **Port proximity**: straight-line km to the nearest of 33 major mainland-EU seaports (a selection, approximate locations); shorter scores higher.
 6. **Talent**: employment in high & medium-high technology manufacturing (Eurostat `htec_emp_reg2`, NACE C_HTC_MH, thousand persons, NUTS-2, latest year), spread over its NUTS-3 regions in proportion to manufacturing GVA (so talent sits where industry is), then distance-weighted from each city (weight 1 nearby, 37% at the hiring radius, fading beyond).
 7. The 'blue banana' line is an approximate centre line for orientation only; it does not enter the score.
