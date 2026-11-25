@@ -217,6 +217,9 @@ Dp = eff_dist(cand.lat.values, cand.lon.values, PORTS.lat.values, PORTS.lon.valu
 cand["port_km"] = Dp.min(axis=1)
 cand["nearest_port"] = PORTS.port.to_numpy()[Dp.argmin(axis=1)]
 
+# keep every city in the search area for manual network selection (no minimum talent there)
+cand_full, R_full = cand.copy(), R_all.copy()
+
 # minimum talent pool: a location must be able to hire technicians and engineers
 keep = (cand.talent_ths >= min_talent).to_numpy()
 if not keep.any():
@@ -252,17 +255,28 @@ RENT = cand.rent.to_numpy(float)
 PORT = cand.port_km.to_numpy(float)
 labels = (cand.city + " (" + cand.country_code + ")").tolist()
 
+# full set (all cities in the search area), same scoring scale, for manual selection
+cand_full["score"] = score_of(cand_full.reach_pct, cand_full.labour_metric, cand_full.talent_ths,
+                              cand_full.rent, cand_full.port_km)
+ord_full = cand_full.sort_values("score", ascending=False).index.to_numpy()
+cand_full = cand_full.loc[ord_full].reset_index(drop=True)
+R_full = R_full[ord_full]
+labels_full = (cand_full.city + " (" + cand_full.country_code + ")").tolist()
+SRC = {"main": (cand, R_all), "full": (cand_full, R_full)}
 
-def network_metrics(site_idx):
+
+def network_metrics(site_idx, src="main"):
     """Each demand point is served by its nearest site; labour & talent weighted by demand served."""
-    Rs = R_all[site_idx]
+    frame, Rsrc = SRC[src]
+    Rs = Rsrc[site_idx]
     nearest = Rs.argmin(axis=0)
     dmin = Rs.min(axis=0)
     dd = delivery_days(dmin, km_per_day)
-    lab = (w * LAB[site_idx][nearest]).sum() / w_total
-    tal = (w * TAL[site_idx][nearest]).sum() / w_total
-    rnt = (w * RENT[site_idx][nearest]).sum() / w_total
-    prt = (w * PORT[site_idx][nearest]).sum() / w_total
+    pick = lambda col: frame[col].to_numpy(float)[site_idx][nearest]
+    lab = (w * pick("labour_metric")).sum() / w_total
+    tal = (w * pick("talent_ths")).sum() / w_total
+    rnt = (w * pick("rent")).sum() / w_total
+    prt = (w * pick("port_km")).sum() / w_total
     out = {f"reach {k}d %": 100 * (w * (dd <= k)).sum() / w_total for k in (1, 2, 3)}
     reach_p = 100 * (w * (dd <= promise_days)).sum() / w_total
     out.update({"avg " + lab_label: lab, "talent (k)": tal, "rent €/m²": rnt, "avg port km": prt,
@@ -326,24 +340,6 @@ st.caption(
 )
 
 top = cand.iloc[0]
-sel = opt.iloc[k_show - 1]
-st.markdown(f"### {'Recommended' if n_sites_choice == 'Auto' else 'Selected'} network: {k_show} "
-            f"site{'s' if k_show > 1 else ''}")
-st.markdown(f"**{sel.locations}**")
-n1, n2, n3, n4 = st.columns(4)
-n1.metric("Within 1 day", f"{sel['reach 1d %']:.0f}%")
-n2.metric("Within 2 days", f"{sel['reach 2d %']:.0f}%")
-n3.metric("Within 3 days", f"{sel['reach 3d %']:.0f}%")
-n4.metric("Net score", f"{sel['net score']:.0f}")
-st.caption("Change the number of sites and the cost per extra site in the sidebar. Details in 'Production network' below.")
-
-st.markdown("### Best single location")
-k1, k2, k3, k4 = st.columns(4)
-k1.metric("Top location", f"{top.city} ({top.country_code})")
-k1.caption(f"Score {top.score:.0f} / 100")
-k2.metric(f"Market reach ({promise_days}d)", f"{top.reach_pct:.0f}%")
-k3.metric("Labour cost (mfg, regional)", f"€{top.mfg_labour_cost_teur:.0f}k/yr")
-k4.metric(f"Talent within {hire_km} km", f"{top.talent_ths:,.0f}k")
 
 # ---------- map of candidates ----------
 st.subheader("Map of candidate locations")
@@ -438,14 +434,17 @@ st.markdown(f"**Showing: {k_show} site{'s' if k_show > 1 else ''}** "
             f"({'recommended' if n_sites_choice == 'Auto' else 'set in the sidebar'}).")
 manual_on = st.toggle("Choose sites manually instead", value=False)
 if manual_on:
-    manual = st.multiselect("Select up to 3 sites", labels, max_selections=3,
+    st.caption("Any city in the search area can be picked here, also those below the minimum talent pool.")
+    manual = st.multiselect("Select up to 3 sites", labels_full, max_selections=3,
                             default=[labels[i] for i in chain[:k_show]])
-    net_idx = [labels.index(l) for l in manual]
+    net_idx = [labels_full.index(l) for l in manual]
+    net_src, net_frame = "full", cand_full
 else:
     net_idx = chain[:k_show]
+    net_src, net_frame = "main", cand
 
 if net_idx:
-    m, nearest, dmin, served = network_metrics(net_idx)
+    m, nearest, dmin, served = network_metrics(net_idx, net_src)
     a, b, c, d = st.columns(4)
     a.metric("Within 1 day", f"{m['reach 1d %']:.0f}%")
     b.metric("Within 2 days", f"{m['reach 2d %']:.0f}%")
@@ -456,7 +455,7 @@ if net_idx:
     nd = dem.copy()
     nd["dist_km"] = dmin
     nd["delivery"] = day_label(delivery_days(dmin, km_per_day))
-    nd["served by"] = [cand.city[net_idx[i]] for i in nearest]
+    nd["served by"] = [net_frame.city[net_idx[i]] for i in nearest]
     n1, n2 = st.columns([3, 2])
     with n1:
         fig3 = px.scatter_map(
@@ -465,7 +464,7 @@ if net_idx:
             color_discrete_map=DAY_COLORS, category_orders={"delivery": DAY_ORDER},
             zoom=3.3, center={"lat": c_lat, "lon": c_lon}, map_style=MAP_STYLE, height=520,
         )
-        sites = cand.iloc[net_idx]
+        sites = net_frame.iloc[net_idx]
         fig3.add_trace(go.Scattermap(lat=sites.lat, lon=sites.lon, mode="markers+text", text=sites.city,
                                      textposition="top right", marker={"size": 18, "color": "black"},
                                      name="Sites", hoverinfo="text"))
