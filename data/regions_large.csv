@@ -1,0 +1,210 @@
+nuts2,region_large_code,region_large
+AT11,AT1,Eastern Austria
+AT13,AT1,Eastern Austria
+AT21,AT2,Southern Austria
+AT22,AT2,Southern Austria
+AT31,AT3,Western Austria
+AT32,AT3,Western Austria
+AT33,AT3,Western Austria
+BE10,BE1,Brussels
+BE21,BE2,Flanders
+BE22,BE2,Flanders
+BE23,BE2,Flanders
+BE24,BE2,Flanders
+BE25,BE2,Flanders
+BE32,BE3,Wallonia
+BE33,BE3,Wallonia
+BE35,BE3,Wallonia
+BG31,BG3,Severna i Yugoiztochna Bulgaria
+BG32,BG3,Severna i Yugoiztochna Bulgaria
+BG33,BG3,Severna i Yugoiztochna Bulgaria
+BG34,BG3,Severna i Yugoiztochna Bulgaria
+BG41,BG4,Yugozapadna i Yuzhna tsentralna Bulgaria
+BG42,BG4,Yugozapadna i Yuzhna tsentralna Bulgaria
+CZ01,CZ-B,Bohemia (West & Central Czechia)
+CZ03,CZ-B,Bohemia (West & Central Czechia)
+CZ04,CZ-B,Bohemia (West & Central Czechia)
+CZ05,CZ-B,Bohemia (West & Central Czechia)
+CZ06,CZ-M,Moravia-Silesia (East Czechia)
+CZ07,CZ-M,Moravia-Silesia (East Czechia)
+CZ08,CZ-M,Moravia-Silesia (East Czechia)
+DE11,DE1,Baden-Württemberg
+DE12,DE1,Baden-Württemberg
+DE13,DE1,Baden-Württemberg
+DE14,DE1,Baden-Württemberg
+DE21,DE2,Bavaria
+DE22,DE2,Bavaria
+DE23,DE2,Bavaria
+DE24,DE2,Bavaria
+DE25,DE2,Bavaria
+DE26,DE2,Bavaria
+DE27,DE2,Bavaria
+DE30,DE3,Berlin
+DE40,DE4,Brandenburg
+DE50,DE5,Bremen
+DE60,DE6,Hamburg
+DE71,DE7,Hesse
+DE72,DE7,Hesse
+DE73,DE7,Hesse
+DE80,DE8,Mecklenburg-Vorpommern
+DE91,DE9,Lower Saxony
+DE92,DE9,Lower Saxony
+DE93,DE9,Lower Saxony
+DE94,DE9,Lower Saxony
+DEA1,DEA,North Rhine-Westphalia
+DEA2,DEA,North Rhine-Westphalia
+DEA3,DEA,North Rhine-Westphalia
+DEA4,DEA,North Rhine-Westphalia
+DEA5,DEA,North Rhine-Westphalia
+DEB1,DEB,Rhineland-Palatinate
+DEB2,DEB,Rhineland-Palatinate
+DEB3,DEB,Rhineland-Palatinate
+DEC0,DEC,Saarland
+DED2,DED,Saxony
+DED4,DED,Saxony
+DED5,DED,Saxony
+DEE0,DEE,Saxony-Anhalt
+DEF0,DEF,Schleswig-Holstein
+DEG0,DEG,Thuringia
+DK01,DK0,Denmark
+DK02,DK0,Denmark
+DK03,DK0,Denmark
+DK04,DK0,Denmark
+DK05,DK0,Denmark
+EE00,EE0,Eesti
+EL30,EL3,Attiki
+EL51,EL5,Voreia Elláda
+EL52,EL5,Voreia Elláda
+EL54,EL5,Voreia Elláda
+EL61,EL6,Kentriki Elláda
+EL63,EL6,Kentriki Elláda
+EL64,EL6,Kentriki Elláda
+EL65,EL6,Kentriki Elláda
+ES11,ES1,North-West Spain
+ES12,ES1,North-West Spain
+ES13,ES1,North-West Spain
+ES21,ES2,North-East Spain
+ES22,ES2,North-East Spain
+ES23,ES2,North-East Spain
+ES24,ES2,North-East Spain
+ES30,ES3,Madrid region
+ES41,ES4,Central Spain
+ES42,ES4,Central Spain
+ES43,ES4,Central Spain
+ES51,ES5,East Spain
+ES52,ES5,East Spain
+ES61,ES6,South Spain
+ES62,ES6,South Spain
+FI19,FI1,Manner-Suomi
+FI1B,FI1,Manner-Suomi
+FI1C,FI1,Manner-Suomi
+FI1D,FI1,Manner-Suomi
+FR10,FR1,Ile de France
+FRB0,FRB,Centre — Val de Loire
+FRC1,FRC,Bourgogne-Franche-Comté
+FRC2,FRC,Bourgogne-Franche-Comté
+FRD1,FRD,Normandie
+FRD2,FRD,Normandie
+FRE1,FRE,Hauts-de-France
+FRE2,FRE,Hauts-de-France
+FRF1,FRF,Grand Est
+FRF2,FRF,Grand Est
+FRF3,FRF,Grand Est
+FRG0,FRG,Pays de la Loire
+FRH0,FRH,Bretagne
+FRI1,FRI,Nouvelle-Aquitaine
+FRI2,FRI,Nouvelle-Aquitaine
+FRI3,FRI,Nouvelle-Aquitaine
+FRJ1,FRJ,Occitanie
+FRJ2,FRJ,Occitanie
+FRK1,FRK,Auvergne-Rhône-Alpes
+FRK2,FRK,Auvergne-Rhône-Alpes
+FRL0,FRL,Provence-Alpes-Côte d’Azur
+HR02,HR0,Croatia
+HR03,HR0,Croatia
+HR05,HR0,Croatia
+HU11,HU1,Central Hungary (Budapest)
+HU12,HU1,Central Hungary (Budapest)
+HU21,HU2,Transdanubia (West Hungary)
+HU22,HU2,Transdanubia (West Hungary)
+HU23,HU2,Transdanubia (West Hungary)
+HU31,HU3,Great Plain & North Hungary
+HU32,HU3,Great Plain & North Hungary
+HU33,HU3,Great Plain & North Hungary
+ITC1,ITC,North-West Italy
+ITC3,ITC,North-West Italy
+ITC4,ITC,North-West Italy
+ITF1,ITF,South Italy
+ITF3,ITF,South Italy
+ITF4,ITF,South Italy
+ITF5,ITF,South Italy
+ITF6,ITF,South Italy
+ITH1,ITH,North-East Italy
+ITH2,ITH,North-East Italy
+ITH3,ITH,North-East Italy
+ITH4,ITH,North-East Italy
+ITH5,ITH,North-East Italy
+ITI1,ITI,Central Italy
+ITI2,ITI,Central Italy
+ITI3,ITI,Central Italy
+ITI4,ITI,Central Italy
+LT01,LT0,Lietuva
+LT02,LT0,Lietuva
+LU00,LU0,Luxembourg
+LV00,LV0,Latvija
+NL11,NL1,North Netherlands
+NL12,NL1,North Netherlands
+NL13,NL1,North Netherlands
+NL21,NL2,East Netherlands
+NL22,NL2,East Netherlands
+NL23,NL2,East Netherlands
+NL32,NL3,West Netherlands
+NL35,NL3,West Netherlands
+NL36,NL3,West Netherlands
+NL41,NL4,South Netherlands
+NL42,NL4,South Netherlands
+PL21,PL2,Southern Poland
+PL22,PL2,Southern Poland
+PL41,PL4,North-West Poland
+PL42,PL4,North-West Poland
+PL43,PL4,North-West Poland
+PL51,PL5,South-West Poland
+PL52,PL5,South-West Poland
+PL61,PL6,Northern Poland
+PL62,PL6,Northern Poland
+PL63,PL6,Northern Poland
+PL71,PL7,Central Poland
+PL72,PL7,Central Poland
+PL81,PL8,Eastern Poland
+PL82,PL8,Eastern Poland
+PL84,PL8,Eastern Poland
+PL91,PL9,Masovia (Warsaw)
+PL92,PL9,Masovia (Warsaw)
+PT11,PT1,Continente
+PT15,PT1,Continente
+PT19,PT1,Continente
+PT1A,PT1,Continente
+PT1B,PT1,Continente
+PT1C,PT1,Continente
+RO11,RO1,Macroregiunea Unu
+RO12,RO1,Macroregiunea Unu
+RO21,RO2,Macroregiunea Doi
+RO22,RO2,Macroregiunea Doi
+RO31,RO3,Macroregiunea Trei
+RO32,RO3,Macroregiunea Trei
+RO41,RO4,Macroregiunea Patru
+RO42,RO4,Macroregiunea Patru
+SE11,SE1,East Sweden
+SE12,SE1,East Sweden
+SE21,SE2,South Sweden
+SE22,SE2,South Sweden
+SE23,SE2,South Sweden
+SE31,SE3,North Sweden
+SE32,SE3,North Sweden
+SE33,SE3,North Sweden
+SI03,SI0,Slovenia
+SI04,SI0,Slovenia
+SK01,SK0,Slovakia
+SK02,SK0,Slovakia
+SK03,SK0,Slovakia
+SK04,SK0,Slovakia
